@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Disallow: /login
+Sitemap: https://instant-proof-app.vercel.app/sitemap.xml
