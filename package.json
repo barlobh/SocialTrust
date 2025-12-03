@@ -2,6 +2,10 @@
     "name": "instant-proof-app",
     "private": true,
     "version": "0.0.0",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/barlobh/socialtrust.git"
+    },
     "type": "module",
     "scripts": {
         "dev": "vite",
@@ -11,6 +15,7 @@
         "preview": "vite preview"
     },
     "dependencies": {
+        "@stripe/stripe-js": "^8.5.3",
         "@vercel/analytics": "^1.5.0",
         "@vercel/postgres": "^0.10.0",
         "@vercel/speed-insights": "^1.2.0",
@@ -20,7 +25,8 @@
         "lucide-react": "^0.292.0",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
-        "react-router-dom": "^7.9.6"
+        "react-router-dom": "^7.9.6",
+        "stripe": "^20.0.0"
     },
     "devDependencies": {
         "@types/react": "^18.2.37",

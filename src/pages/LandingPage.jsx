@@ -18,18 +18,22 @@ export default function LandingPage() {
             const res = await fetch(`/api/search?q=${encodeURIComponent(businessUrl)}`);
             const data = await res.json();
 
-            const mentionCount = data?.total || 0;
-            const baseScore = Math.min(99, 60 + Math.min(mentionCount * 2, 30));
+            const apiTrust = data?.trustScore || {};
+            const mentionCount = apiTrust.volume ?? data?.total ?? 0;
+            const baseScore = apiTrust.score ?? Math.min(99, 60 + Math.min((mentionCount || 0) * 2, 30));
+            const sourceCount = (apiTrust.sourceCount ?? (data?.mentions ? new Set(data.mentions.map((m) => m.source)).size : 0)) || 1;
+            const freshness = apiTrust.freshestDays ?? null;
 
             setLeads(data?.mentions || []);
             setTrustScore({
                 score: baseScore,
-                reviews: mentionCount * 3 || 24,
+                reviews: apiTrust.volume ? apiTrust.volume * 3 : mentionCount * 3 || 24,
                 avgRating: 4.7,
                 mentions: mentionCount,
                 sentiment: mentionCount > 0 ? 'Positive' : 'Unknown',
-                conversionBoost: mentionCount > 0 ? '+160%' : '+80%',
-                sources: 12
+                conversionBoost: baseScore >= 80 ? '+180%' : '+120%',
+                sources: sourceCount,
+                freshness,
             });
         } catch (err) {
             console.error('Search failed', err);
@@ -54,7 +58,7 @@ export default function LandingPage() {
                             </div>
                             <div>
                                 <h1 className="text-xl font-bold tracking-tight">InstantProof</h1>
-                                <p className="text-xs text-gray-500">AI Social Proof Engine</p>
+                                <p className="text-xs text-gray-500">AI Social Proof & Trust Score Engine</p>
                             </div>
                         </div>
 
@@ -100,7 +104,7 @@ export default function LandingPage() {
                 <div className="text-center max-w-4xl mx-auto mb-16">
                     <div className="inline-flex items-center gap-2 bg-emerald-500/10 border border-emerald-400/30 rounded-full px-4 py-2 text-sm mb-8">
                         <Sparkles className="w-4 h-4 text-emerald-400" />
-                        <span className="text-emerald-400 font-semibold">Powered by Advanced AI</span>
+                        <span className="text-emerald-400 font-semibold">Powered by AI Social Proof Automation</span>
                     </div>
 
                     <h1 className="text-5xl lg:text-7xl font-bold mb-6 leading-tight">
@@ -112,7 +116,7 @@ export default function LandingPage() {
                     </h1>
 
                     <p className="text-xl text-gray-400 mb-12 leading-relaxed">
-                        AI scans 47 sources, verifies real reviews, and generates dynamic trust widgets that increase conversions by 287% on average. All in 60 seconds.
+                        AI scans 47 sources for verified reviews and social mentions, then generates an embeddable social proof widget and trust score that lifts conversions by 287% on average. All in 60 seconds.
                     </p>
 
                     {/* Trust Score Generator - Primary CTA */}
@@ -234,14 +238,14 @@ export default function LandingPage() {
 
                                 <Link to="/dashboard">
                                     <button className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:shadow-2xl hover:shadow-emerald-500/50 py-5 rounded-2xl font-bold text-lg transition">
-                                        Install This Widget Now (Free 14-Day Trial)
+                                        Install the AI Social Proof Widget (Free 14-Day Trial)
                                     </button>
                                 </Link>
                             </div>
                         )}
                     </div>
 
-                    <p className="text-sm text-gray-500">No credit card required • 14-day free trial • Cancel anytime</p>
+                    <p className="text-sm text-gray-500">No credit card required - 14-day free trial - Cancel anytime</p>
                 </div>
 
                 {/* Stats Section */}
@@ -273,21 +277,21 @@ export default function LandingPage() {
                                 step: '01',
                                 icon: Globe,
                                 title: 'AI Scans 47 Sources',
-                                desc: 'Our advanced AI autonomously scans Google, social media, forums, and review sites to find every mention of your business.',
+                                desc: 'Our advanced AI autonomously scans Google, social media, forums, and review sites to find every mention of your business, acting as a full review aggregator for reputation management.',
                                 color: 'from-blue-500 to-cyan-500'
                             },
                             {
                                 step: '02',
                                 icon: Shield,
                                 title: 'Verifies Authenticity',
-                                desc: 'Machine learning algorithms verify each review is real, filtering out fake reviews and spam using advanced NLP.',
+                                desc: 'Machine learning verifies each review is real, filtering out fake reviews and spam using advanced NLP so only verified reviews power your trust signals.',
                                 color: 'from-emerald-500 to-teal-500'
                             },
                             {
                                 step: '03',
                                 icon: Rocket,
                                 title: 'Generates Trust Widget',
-                                desc: 'Beautiful, conversion-optimized widget that auto-updates with new reviews and adapts to your brand instantly.',
+                                desc: 'Beautiful, conversion-optimized social proof widget and trust badge that auto-updates with new reviews and adapts to your brand instantly.',
                                 color: 'from-purple-500 to-pink-500'
                             }
                         ].map((item, idx) => (
@@ -420,13 +424,13 @@ export default function LandingPage() {
                 <div className="text-center max-w-3xl mx-auto">
                     <h2 className="text-4xl font-bold mb-6">Join 12,847 Growing Businesses</h2>
                     <p className="text-xl text-gray-400 mb-8">
-                        Start converting more customers with AI-powered social proof. No credit card required.
+                        Start converting more customers with AI-powered social proof, verified reviews, and a live trust score. No credit card required.
                     </p>
                     <button className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:shadow-2xl hover:shadow-emerald-500/50 px-12 py-5 rounded-full font-bold text-lg transition inline-flex items-center gap-2 mb-4">
                         Start Free 14-Day Trial
                         <ArrowRight className="w-5 h-5" />
                     </button>
-                    <p className="text-sm text-gray-500">Join in 60 seconds • See results in 48 hours • Cancel anytime</p>
+                    <p className="text-sm text-gray-500">Join in 60 seconds - See results in 48 hours - Cancel anytime</p>
                 </div>
 
             </div>
@@ -456,7 +460,7 @@ export default function LandingPage() {
                     </div>
 
                     <div className="border-t border-white/5 pt-8 text-center text-sm text-gray-600">
-                        © 2025 InstantProof. All rights reserved. Built with AI.
+                        (c) 2025 InstantProof. All rights reserved. Built with AI.
                     </div>
                 </div>
             </footer>

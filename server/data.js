@@ -22,6 +22,78 @@ const toDisplayDate = (value) => {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
 
+const normalizeMention = (mention = {}) => {
+    const createdAt = mention.created_at ? new Date(mention.created_at) : new Date();
+    return {
+        source: mention.source || 'Unknown',
+        author: mention.author || '',
+        title: mention.title || mention.text || '',
+        text: mention.text || mention.title || '',
+        link: mention.link,
+        created_at: createdAt,
+        date: toDisplayDate(createdAt),
+    };
+};
+
+const dedupeMentions = (mentions = []) => {
+    const seen = new Set();
+    return mentions.filter((m) => {
+        const key = `${m.source || ''}|${m.link || ''}|${m.title || m.text || ''}`.toLowerCase();
+        if (!key.trim()) return false;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+    });
+};
+
+async function storeMentions(mentions = []) {
+    if (!hasDb() || !mentions.length) return;
+    await ensureSchema();
+
+    for (const mention of mentions) {
+        try {
+            await sql`
+                INSERT INTO mentions (source, author, title, text, link, created_at)
+                VALUES (${mention.source}, ${mention.author || null}, ${mention.title || null}, ${mention.text || null}, ${mention.link || null}, ${mention.created_at || new Date()})
+                ON CONFLICT DO NOTHING;
+            `;
+        } catch (err) {
+            console.error('Failed to store mention', err);
+        }
+    }
+}
+
+function computeTrustScore(mentions = []) {
+    const now = Date.now();
+    const volume = mentions.length;
+    const sourceCount = new Set(mentions.map((m) => m.source || '')).size || 1;
+
+    const freshnessDays = mentions
+        .map((m) => {
+            if (!m.created_at) return Number.POSITIVE_INFINITY;
+            const ageMs = now - new Date(m.created_at).getTime();
+            return ageMs / (1000 * 60 * 60 * 24);
+        })
+        .filter((n) => Number.isFinite(n));
+
+    const freshest = freshnessDays.length ? Math.min(...freshnessDays) : 30;
+
+    const volumeScore = Math.min(30, volume * 3); // more mentions -> higher
+    const sourceScore = Math.min(15, Math.max(0, (sourceCount - 1) * 4)); // diverse sources
+    const freshnessScore = Math.min(20, Math.max(0, 20 - freshest)); // fresher mentions score more
+
+    const base = 45;
+    const score = Math.min(99, Math.round(base + volumeScore + sourceScore + freshnessScore));
+
+    return {
+        score,
+        volume,
+        sourceCount,
+        freshestDays: Math.round(freshest),
+        calculatedAt: new Date().toISOString(),
+    };
+}
+
 export async function ensureSchema() {
     if (!hasDb() || schemaInitialized) return;
 
@@ -43,6 +115,21 @@ export async function ensureSchema() {
             created_at TIMESTAMPTZ DEFAULT NOW()
         );
     `;
+
+    await sql`
+        CREATE TABLE IF NOT EXISTS mentions (
+            id SERIAL PRIMARY KEY,
+            source TEXT NOT NULL,
+            author TEXT,
+            title TEXT,
+            text TEXT,
+            link TEXT,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            inserted_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    `;
+
+    await sql`CREATE UNIQUE INDEX IF NOT EXISTS mentions_source_link_idx ON mentions (source, link);`;
 
     schemaInitialized = true;
 }
@@ -212,48 +299,67 @@ export function buildEmbedMarkup({ title = 'Recent Reviews', reviews = fallbackR
 
 export async function searchMentions(query, limit = 10) {
     const q = (query || '').trim();
-    if (!q) return { mentions: [], total: 0 };
+    if (!q) return { mentions: [], total: 0, trustScore: computeTrustScore([]) };
 
-    const [hn, reddit] = await Promise.all([
-        fetchHackerNewsMentions(limit, q).catch(() => []),
-        fetchRedditMentions(limit, q).catch(() => []),
-    ]);
+    const tasks = [
+        fetchHackerNewsMentions(limit, q).catch((err) => {
+            console.error('HN fetch failed', err);
+            return [];
+        }),
+        fetchRedditMentions(limit, q).catch((err) => {
+            console.error('Reddit fetch failed', err);
+            return [];
+        }),
+    ];
 
-    const combined = [...hn, ...reddit].slice(0, limit);
-    return { mentions: combined, total: combined.length };
+    if (process.env.GNEWS_API_KEY) {
+        tasks.push(
+            fetchNewsMentions(limit, q).catch((err) => {
+                console.error('News fetch failed', err);
+                return [];
+            })
+        );
+    }
+
+    const results = await Promise.all(tasks);
+    const combined = dedupeMentions(results.flat()).slice(0, limit);
+
+    await storeMentions(combined);
+    const trustScore = computeTrustScore(combined);
+
+    return { mentions: combined, total: combined.length, trustScore };
 }
 
 async function fetchExternalMentions(limit = 6) {
     // Free, allowed sources without API keys: Hacker News API + Reddit JSON endpoints.
     // We keep it resilient: if network fails, we return [] silently.
-    const hnPromise = fetchHackerNewsMentions(Math.ceil(limit / 2)).catch(() => []);
-    const redditPromise = fetchRedditMentions(Math.ceil(limit / 2)).catch(() => []);
+    const fallbackQuery = 'reviews';
+    const hnPromise = fetchHackerNewsMentions(Math.ceil(limit / 2), fallbackQuery).catch(() => []);
+    const redditPromise = fetchRedditMentions(Math.ceil(limit / 2), fallbackQuery).catch(() => []);
     const [hn, reddit] = await Promise.all([hnPromise, redditPromise]);
-    return [...hn, ...reddit].slice(0, limit);
+    return dedupeMentions([...hn, ...reddit]).slice(0, limit);
 }
 
-async function fetchHackerNewsMentions(limit = 3) {
-    const topUrl = 'https://hacker-news.firebaseio.com/v0/topstories.json';
-    const ids = await fetchJson(topUrl);
-    if (!Array.isArray(ids)) return [];
-    const picks = ids.slice(0, limit * 2); // overfetch slightly
-    const stories = await Promise.all(
-        picks.map(async (id) => {
-            const item = await fetchJson(`https://hacker-news.firebaseio.com/v0/item/${id}.json`);
-            return item;
-        })
-    );
-    return stories
-        .filter(Boolean)
+async function fetchHackerNewsMentions(limit = 3, query = 'reviews') {
+    const encoded = encodeURIComponent(query || 'reviews');
+    const searchUrl = `https://hn.algolia.com/api/v1/search?query=${encoded}&tags=story&hitsPerPage=${Math.max(
+        10,
+        limit * 2
+    )}`;
+    const json = await fetchJson(searchUrl);
+    const hits = Array.isArray(json?.hits) ? json.hits : [];
+    return hits
         .slice(0, limit)
-        .map((item) => ({
-            source: 'HackerNews',
-            author: item.by || 'hn-user',
-            rating: 5,
-            text: item.title || 'Mention on Hacker News',
-            date: toDisplayDate((item.time || 0) * 1000),
-            link: item.url || `https://news.ycombinator.com/item?id=${item.id}`,
-        }));
+        .map((item) =>
+            normalizeMention({
+                source: 'HackerNews',
+                author: item.author || 'hn-user',
+                title: item.title || 'Mention on Hacker News',
+                text: item.story_text || item.title || 'Mention on Hacker News',
+                link: item.url || `https://news.ycombinator.com/item?id=${item.objectID}`,
+                created_at: item.created_at || new Date(),
+            })
+        );
 }
 
 async function fetchRedditMentions(limit = 3, query = 'reviews') {
@@ -265,14 +371,38 @@ async function fetchRedditMentions(limit = 3, query = 'reviews') {
         .map((p) => p.data)
         .filter(Boolean)
         .slice(0, limit)
-        .map((post) => ({
-            source: 'Reddit',
-            author: post.author || 'reddit-user',
-            rating: 5,
-            text: post.title || 'Mention on Reddit',
-            date: toDisplayDate((post.created_utc || 0) * 1000),
-            link: post.permalink ? `https://reddit.com${post.permalink}` : undefined,
-        }));
+        .map((post) =>
+            normalizeMention({
+                source: 'Reddit',
+                author: post.author || 'reddit-user',
+                title: post.title || 'Mention on Reddit',
+                text: post.title || 'Mention on Reddit',
+                link: post.permalink ? `https://reddit.com${post.permalink}` : undefined,
+                created_at: post.created_utc ? new Date(post.created_utc * 1000) : new Date(),
+            })
+        );
+}
+
+async function fetchNewsMentions(limit = 3, query = 'reviews') {
+    const apiKey = process.env.GNEWS_API_KEY;
+    if (!apiKey) return [];
+    const encoded = encodeURIComponent(query || 'reviews');
+    const searchUrl = `https://gnews.io/api/v4/search?q=${encoded}&lang=en&max=${Math.max(
+        5,
+        limit
+    )}&token=${apiKey}`;
+    const json = await fetchJson(searchUrl);
+    const articles = Array.isArray(json?.articles) ? json.articles : [];
+    return articles.slice(0, limit).map((article) =>
+        normalizeMention({
+            source: 'News',
+            author: article.source?.name || article.author || 'newswire',
+            title: article.title || 'News mention',
+            text: article.description || article.title || 'News mention',
+            link: article.url,
+            created_at: article.publishedAt || new Date(),
+        })
+    );
 }
 
 async function fetchJson(url) {

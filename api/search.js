@@ -19,8 +19,8 @@ export default async function handler(req, res) {
     }
 
     try {
-        const { mentions, total } = await searchMentions(query, 12);
-        respond(res, 200, { mentions, total });
+        const { mentions, total, trustScore } = await searchMentions(query, 12);
+        respond(res, 200, { mentions, total, trustScore });
     } catch (err) {
         console.error('Search handler error', err);
         respond(res, 500, { error: 'Failed to search mentions' });
