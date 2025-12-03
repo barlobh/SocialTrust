@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Shield, TrendingUp, Zap, Users, Star, CheckCircle, Award, Target, BarChart3, Rocket, Crown, Sparkles, ArrowRight, Globe, Lock, Eye, Loader2, Link as LinkIcon } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import LiveActivityWidget from '../components/LiveActivityWidget';
 
 export default function LandingPage() {
     const [trustScore, setTrustScore] = useState(null);
@@ -464,6 +465,9 @@ export default function LandingPage() {
                     </div>
                 </div>
             </footer>
+
+            {/* Live Activity Widget */}
+            <LiveActivityWidget />
         </div>
     );
 }
